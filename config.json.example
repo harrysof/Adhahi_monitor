@@ -3,17 +3,22 @@
     "telegram_chat_id": "YOUR_CHAT_ID",
     "check_interval_minutes": 15,
     "summary_interval_hours": 2,
-    "target_wilayas": [
-        "16",
-        "09",
-        "15",
-        "35",
-        "42",
-        "44",
-        "26",
-        "10",
-        "02"
-    ],
+    "target_wilayas": ["16", "09", "15", "35", "42", "44", "26", "10", "02"],
     "api_url": "https://adhahi.dz/api/v1/public/wilaya-quotas",
-    "register_url": "https://adhahi.dz/register"
+    "register_url": "https://adhahi.dz/register",
+
+    "auto_register": false,
+    "registrants": [
+        {
+            "name":     "Person 1",
+            "nin":      "",
+            "cni":      "",
+            "phone":    "",
+            "email":    "",
+            "password": "",
+            "wilaya":   "الجزائر",
+            "commune":  "الجزائر الوسطى",
+            "payment":  "cash"
+        }
+    ]
 }

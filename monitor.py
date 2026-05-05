@@ -1,40 +1,21 @@
 """
-╔══════════════════════════════════════════════════════════════════╗
-║          ADHAHI.DZ — Booking Availability Monitor               ║
-║   Monitors Alger + nearby wilayas for open sheep bookings      ║
-║   Sends instant Telegram alerts + periodic 2-hour summaries    ║
-║   Supports /check and /status Telegram commands                ║
-╚══════════════════════════════════════════════════════════════════╝
-
-Usage:
-    1. Fill in config.json with your Telegram bot token & chat ID
-    2. pip install -r requirements.txt
-    3. python monitor.py
-
-Telegram Commands:
-    /check   — Force an immediate availability check right now
-    /status  — Show current known status without re-checking
-    /help    — List available commands
+Adhahi Monitor + Auto-Register (Integrated)
+- Monitors 9 wilayas near Alger every 15 min
+- On detection: sends Telegram alert + auto-fills Chrome form
+- Telegram commands: /check, /status, /help
+- Must run locally (adhahi.dz geo-blocks cloud IPs)
 """
 
-import io
-import json
-import logging
-import sys
-import threading
-import time
+import io, json, logging, sys, threading, time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
 import requests
 
-# ─── Fix Windows console encoding for Arabic/emoji text ──────────────────────
 if sys.platform == "win32":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
-
-# ─── Logging Setup ────────────────────────────────────────────────────────────
 
 logging.basicConfig(
     level=logging.INFO,
@@ -45,555 +26,499 @@ logging.basicConfig(
         logging.FileHandler("monitor.log", encoding="utf-8"),
     ],
 )
-logger = logging.getLogger("adhahi_monitor")
+logger = logging.getLogger("adhahi")
 
-# ─── Wilaya Reference Map ─────────────────────────────────────────────────────
-# All wilayas near Alger + the 3 primary targets
-
-WILAYA_NAME_MAP = {
-    # Primary targets
-    "16": {"fr": "Alger",      "ar": "الجزائر",    "en": "Algiers",    "region": "Primary"},
-    "09": {"fr": "Blida",      "ar": "البليدة",    "en": "Blida",      "region": "Near Alger"},
-    "15": {"fr": "Tizi Ouzou", "ar": "تيزي وزو",   "en": "Tizi Ouzou", "region": "Primary"},
-    # Near Alger
-    "35": {"fr": "Boumerdès",  "ar": "بومرداس",    "en": "Boumerdas",  "region": "Near Alger"},
-    "42": {"fr": "Tipaza",     "ar": "تيبازة",     "en": "Tipaza",     "region": "Near Alger"},
-    "44": {"fr": "Aïn Defla",  "ar": "عين الدفلى", "en": "Ain Defla",  "region": "Near Alger"},
-    "26": {"fr": "Médéa",      "ar": "المدية",     "en": "Medea",      "region": "Near Alger"},
-    "10": {"fr": "Bouira",     "ar": "البويرة",    "en": "Bouira",     "region": "Near Alger"},
-    "02": {"fr": "Chlef",      "ar": "الشلف",      "en": "Chlef",      "region": "Near Alger"},
+WILAYA_MAP = {
+    "16": {"fr": "Alger",      "ar": "الجزائر",    "region": "Primary"},
+    "09": {"fr": "Blida",      "ar": "البليدة",    "region": "Near Alger"},
+    "15": {"fr": "Tizi Ouzou", "ar": "تيزي وزو",   "region": "Primary"},
+    "35": {"fr": "Boumerdès",  "ar": "بومرداس",    "region": "Near Alger"},
+    "42": {"fr": "Tipaza",     "ar": "تيبازة",     "region": "Near Alger"},
+    "44": {"fr": "Aïn Defla",  "ar": "عين الدفلى", "region": "Near Alger"},
+    "26": {"fr": "Médéa",      "ar": "المدية",     "region": "Near Alger"},
+    "10": {"fr": "Bouira",     "ar": "البويرة",    "region": "Near Alger"},
+    "02": {"fr": "Chlef",      "ar": "الشلف",      "region": "Near Alger"},
 }
 
-# ─── Config Loading ──────────────────────────────────────────────────────────
 
-def load_config(path: str = "config.json") -> dict:
-    """Load and validate configuration from JSON file."""
-    config_path = Path(path)
-    if not config_path.exists():
-        logger.error(f"Config file not found: {path}")
-        sys.exit(1)
+def load_config() -> dict:
+    with open("config.json", "r", encoding="utf-8") as f:
+        return json.load(f)
 
-    with open(config_path, "r", encoding="utf-8") as f:
-        config = json.load(f)
 
-    if config.get("telegram_bot_token", "").startswith("YOUR_"):
-        logger.error("Please set your Telegram bot token in config.json!")
-        sys.exit(1)
-    if config.get("telegram_chat_id", "").startswith("YOUR_"):
-        logger.error("Please set your Telegram chat ID in config.json!")
-        sys.exit(1)
+# ─── Selenium Auto-Register ──────────────────────────────────────────────────
 
-    return config
+def auto_fill_form(personal_info: dict, register_url: str, telegram_fn):
+    """Open Chrome and auto-fill the registration form. Pauses for CAPTCHA/OTP."""
+    try:
+        from selenium import webdriver
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.common.keys import Keys
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.chrome.service import Service
+        from webdriver_manager.chrome import ChromeDriverManager
+    except ImportError:
+        logger.error("Missing selenium/webdriver-manager. Run: pip install -r requirements.txt")
+        return
+
+    p = personal_info
+    logger.info("Opening Chrome for auto-registration...")
+
+    options = webdriver.ChromeOptions()
+    options.add_argument("--start-maximized")
+    driver = webdriver.Chrome(
+        service=Service(ChromeDriverManager().install()),
+        options=options,
+    )
+    wait = WebDriverWait(driver, 30)
+
+    def fill(selector, value):
+        el = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, selector)))
+        el.clear()
+        el.send_keys(value)
+
+    def click(selector):
+        el = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, selector)))
+        driver.execute_script("arguments[0].scrollIntoView(true);", el)
+        el.click()
+
+    try:
+        driver.get(register_url)
+        logger.info("Page loaded")
+
+        fill("#reg-nin",              p["nin"])
+        fill("#reg-cni",              p["cni"])
+        fill("#reg-phone",            p["phone"])
+        if p.get("email"):
+            fill("#reg-email",        p["email"])
+        fill("#reg-password",         p["password"])
+        fill("#reg-confirm-password", p["password"])
+        logger.info("Personal fields filled")
+
+        # Wilaya
+        wi = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "#reg-wilaya")))
+        wi.click(); time.sleep(0.5)
+        wi.send_keys(p["wilaya"]); time.sleep(1.5)
+        wi.send_keys(Keys.ARROW_DOWN); wi.send_keys(Keys.RETURN)
+        logger.info(f"Wilaya selected: {p['wilaya']}")
+
+        # Commune
+        time.sleep(2)
+        co = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "#reg-commune")))
+        co.click(); time.sleep(0.5)
+        co.send_keys(p["commune"]); time.sleep(1.5)
+        co.send_keys(Keys.ARROW_DOWN); co.send_keys(Keys.RETURN)
+        logger.info(f"Commune selected: {p['commune']}")
+
+        # Payment
+        time.sleep(1)
+        payment_map = {"cash": 0, "tpe": 1, "online": 2}
+        idx = payment_map.get(p.get("payment", "cash").lower(), 0)
+        radios = driver.find_elements(By.CSS_SELECTOR, "[role='radio']")
+        if radios and idx < len(radios):
+            driver.execute_script("arguments[0].click();", radios[idx])
+
+        # Agreement
+        time.sleep(0.5)
+        click("#reg-law-1807-checkbox")
+        logger.info("Form filled — waiting for CAPTCHA")
+
+        # Notify CAPTCHA needed
+        telegram_fn(
+            "🔒 <b>CAPTCHA needed!</b>\n\n"
+            "Chrome is open and the form is filled.\n"
+            "👉 Solve the CAPTCHA then click SUBMIT.\n"
+            f"⏰ {datetime.now().strftime('%H:%M:%S')}"
+        )
+        input("\n  ⚠ Solve the CAPTCHA in Chrome, then press Enter here...\n")
+
+        # OTP step
+        telegram_fn(
+            "📱 <b>OTP sent to your phone!</b>\n\n"
+            "Enter the 6-digit SMS code in Chrome.\n"
+            f"⏰ {datetime.now().strftime('%H:%M:%S')}"
+        )
+        input("  ⚠ Enter the OTP in Chrome, then press Enter here...\n")
+
+        logger.info("Registration submitted!")
+        telegram_fn(
+            "✅ <b>Registration submitted!</b>\n"
+            "Check adhahi.dz to confirm your booking.\n"
+            f"⏰ {datetime.now().strftime('%H:%M:%S')}"
+        )
+
+    except Exception as e:
+        logger.error(f"Browser error: {e}")
+        telegram_fn(f"❌ Auto-fill error: {e}")
+    finally:
+        input("\n  Press Enter to close the browser...\n")
+        driver.quit()
 
 
 # ─── Telegram Client ─────────────────────────────────────────────────────────
 
 class TelegramClient:
-    """Handles all Telegram bot messaging and update polling."""
-
-    def __init__(self, bot_token: str, chat_id: str):
-        self.bot_token = bot_token
+    def __init__(self, token: str, chat_id: str):
+        self.token   = token
         self.chat_id = str(chat_id)
-        self.base_url = f"https://api.telegram.org/bot{bot_token}"
-        self._last_update_id: int = 0
+        self.base    = f"https://api.telegram.org/bot{token}"
+        self._last_update_id = 0
 
-    # ── Sending ──────────────────────────────────────────────────────────────
-
-    def send_message(self, text: str, parse_mode: str = "HTML") -> bool:
-        """Send a message. Returns True on success."""
-        url = f"{self.base_url}/sendMessage"
-        payload = {
-            "chat_id": self.chat_id,
-            "text": text,
-            "parse_mode": parse_mode,
-            "disable_web_page_preview": False,
-        }
+    def send(self, text: str) -> bool:
         try:
-            resp = requests.post(url, json=payload, timeout=15)
-            if resp.status_code == 200:
-                logger.info("Telegram message sent OK")
-                return True
-            else:
-                logger.error(f"Telegram API error {resp.status_code}: {resp.text[:200]}")
-                return False
-        except requests.RequestException as e:
-            logger.error(f"Telegram send failed: {e}")
+            r = requests.post(f"{self.base}/sendMessage", json={
+                "chat_id": self.chat_id, "text": text,
+                "parse_mode": "HTML", "disable_web_page_preview": False,
+            }, timeout=15)
+            ok = r.status_code == 200
+            logger.info(f"Telegram: {'OK' if ok else 'FAIL'}")
+            return ok
+        except Exception as e:
+            logger.error(f"Telegram send error: {e}")
             return False
 
-    def send_availability_alert(self, wilaya_code: str, wilaya_data: dict, register_url: str):
-        """Urgent alert when a target wilaya becomes available."""
-        names = WILAYA_NAME_MAP.get(wilaya_code, {})
-        fr_name = wilaya_data.get("wilayaNameFr", names.get("fr", "Unknown"))
-        ar_name = wilaya_data.get("wilayaNameAr", names.get("ar", ""))
-        region = names.get("region", "")
-
+    def send_alert(self, code: str, w: dict, url: str):
+        fr  = w.get("wilayaNameFr", WILAYA_MAP.get(code, {}).get("fr", "?"))
+        ar  = w.get("wilayaNameAr", WILAYA_MAP.get(code, {}).get("ar", "?"))
+        rgn = WILAYA_MAP.get(code, {}).get("region", "")
         msg = (
-            f"🚨🚨🚨 <b>BOOKING AVAILABLE!</b> 🚨🚨🚨\n"
-            f"\n"
-            f"🐑 <b>{fr_name}</b> — {ar_name}\n"
-            f"📍 Wilaya: {wilaya_code} ({region})\n"
-            f"\n"
-            f"⚡ <b>Register NOW before slots fill up!</b>\n"
-            f"\n"
-            f"👉 <a href=\"{register_url}\">CLICK HERE TO REGISTER</a>\n"
-            f"\n"
+            f"🚨🚨🚨 <b>BOOKING AVAILABLE!</b> 🚨🚨🚨\n\n"
+            f"🐑 <b>{fr}</b> — {ar}\n"
+            f"📍 Wilaya {code} ({rgn})\n\n"
+            f"⚡ <b>Register NOW!</b>\n\n"
+            f"👉 <a href=\"{url}\">CLICK HERE TO REGISTER</a>\n\n"
             f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         )
-        # Triple-send for urgency
         for _ in range(3):
-            self.send_message(msg)
+            self.send(msg)
             time.sleep(1)
 
-    def send_check_result(self, all_wilayas: list, target_codes: list, register_url: str, triggered_by: str = "schedule"):
-        """Send immediate check results (used for /check command and scheduled checks)."""
-        now = datetime.now()
-
-        # Split into available vs not
-        target_available = []
-        target_unavailable = []
-
-        for w in all_wilayas:
+    def send_check_result(self, wilayas: list, targets: list, url: str):
+        avail, unavail = [], []
+        for w in wilayas:
             code = w.get("wilayaCode", "")
-            if code not in target_codes:
+            if code not in targets:
                 continue
-            name_fr = w.get("wilayaNameFr", WILAYA_NAME_MAP.get(code, {}).get("fr", "?"))
-            region = WILAYA_NAME_MAP.get(code, {}).get("region", "")
+            fr  = w.get("wilayaNameFr", WILAYA_MAP.get(code, {}).get("fr", "?"))
+            rgn = WILAYA_MAP.get(code, {}).get("region", "")
             if w.get("available"):
-                target_available.append(f"  ✅ <b>{name_fr}</b> [{region}] — code {code}")
+                avail.append(f"  ✅ <b>{fr}</b> [{rgn}]")
             else:
-                target_unavailable.append(f"  ❌ {name_fr} [{region}] — code {code}")
+                unavail.append(f"  ❌ {fr} [{rgn}]")
 
-        trigger_icon = "🔘" if triggered_by == "schedule" else "👤"
-        trigger_label = "Scheduled check" if triggered_by == "schedule" else "Manual /check"
-
-        avail_section = (
-            "\n".join(target_available) if target_available
-            else "  ❌ None of your wilayas are available"
-        )
-        unavail_section = "\n".join(target_unavailable) if target_unavailable else "  (none)"
-
-        global_avail = [w for w in all_wilayas if w.get("available")]
-        global_note = ""
+        global_avail = [w for w in wilayas if w.get("available")]
+        extra = ""
         if global_avail:
             names = ", ".join(w.get("wilayaNameFr", "?") for w in global_avail)
-            global_note = f"\n\n🌍 <b>Other available wilayas:</b> {names}"
+            extra = f"\n\n🌍 <b>Nationally available:</b> {names}"
 
-        msg = (
-            f"{trigger_icon} <b>Booking Check — {trigger_label}</b>\n"
-            f"⏰ {now.strftime('%Y-%m-%d %H:%M:%S')}\n"
-            f"{'━' * 28}\n"
-            f"\n"
-            f"🟢 <b>Available:</b>\n{avail_section}\n"
-            f"\n"
-            f"🔴 <b>Unavailable:</b>\n{unavail_section}"
-            f"{global_note}\n"
-            f"\n"
-            f"👉 <a href=\"{register_url}\">Register here</a>"
+        self.send(
+            f"🔘 <b>Check Result</b> — {datetime.now().strftime('%H:%M:%S')}\n"
+            f"{'━'*28}\n\n"
+            f"🟢 <b>Available:</b>\n" + ("\n".join(avail) or "  None") + "\n\n"
+            f"🔴 <b>Unavailable:</b>\n" + ("\n".join(unavail) or "  None") +
+            extra + f"\n\n👉 <a href=\"{url}\">Register</a>"
         )
-        self.send_message(msg)
 
-    def send_summary(self, all_wilayas: list, target_codes: list, register_url: str, checks_count: int):
-        """Send a periodic 2-hour summary."""
-        now = datetime.now()
-
-        target_lines = []
-        for w in all_wilayas:
+    def send_summary(self, wilayas: list, targets: list, url: str, checks: int, hrs: int):
+        lines = []
+        for w in wilayas:
             code = w.get("wilayaCode", "")
-            if code not in target_codes:
+            if code not in targets:
                 continue
-            status = "✅ AVAILABLE" if w.get("available") else "❌ Unavailable"
-            name_fr = w.get("wilayaNameFr", WILAYA_NAME_MAP.get(code, {}).get("fr", "?"))
-            region = WILAYA_NAME_MAP.get(code, {}).get("region", "")
-            target_lines.append(f"  • <b>{name_fr}</b> [{region}]: {status}")
+            fr  = w.get("wilayaNameFr", WILAYA_MAP.get(code, {}).get("fr", "?"))
+            rgn = WILAYA_MAP.get(code, {}).get("region", "")
+            icon = "✅" if w.get("available") else "❌"
+            lines.append(f"  • {icon} <b>{fr}</b> [{rgn}]")
 
-        total = len(all_wilayas)
-        available_count = sum(1 for w in all_wilayas if w.get("available"))
-
-        global_avail = [w for w in all_wilayas if w.get("available")]
+        total_avail = sum(1 for w in wilayas if w.get("available"))
+        global_avail = [w for w in wilayas if w.get("available")]
+        global_sec = ""
         if global_avail:
-            avail_names = "\n".join(
-                f"  • {w.get('wilayaNameFr', '?')} (code {w.get('wilayaCode', '?')})"
-                for w in global_avail
-            )
-            global_section = f"\n📗 <b>All Available Wilayas:</b>\n{avail_names}\n"
+            names = "\n".join(f"  • {w.get('wilayaNameFr','?')} ({w.get('wilayaCode','?')})" for w in global_avail)
+            global_sec = f"\n\n📗 <b>All available:</b>\n{names}"
         else:
-            global_section = "\n📕 <b>No wilayas available nationwide right now.</b>\n"
+            global_sec = "\n\n📕 No wilayas available nationwide"
 
-        msg = (
-            f"📊 <b>ADHAHI 2-HOUR SUMMARY</b>\n"
-            f"{'━' * 28}\n"
-            f"⏰ {now.strftime('%Y-%m-%d %H:%M:%S')}\n"
-            f"\n"
-            f"🎯 <b>Your Tracked Wilayas:</b>\n"
-            + "\n".join(target_lines) +
-            f"\n\n"
-            f"📈 <b>Nationwide:</b> {available_count}/{total} available\n"
-            f"🔍 Checks in last 2h: {checks_count}"
-            f"{global_section}\n"
-            f"👉 <a href=\"{register_url}\">Register here</a>\n"
-            f"🔄 Next summary in 2 hours\n"
-            f"\n"
-            f"💡 Send /check to force a check anytime"
+        self.send(
+            f"📊 <b>ADHAHI {hrs}H SUMMARY</b>\n{'━'*28}\n"
+            f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+            f"🎯 <b>Your Tracked Wilayas:</b>\n" + "\n".join(lines) +
+            f"\n\n📈 Nationwide: {total_avail}/{len(wilayas)} available\n"
+            f"🔍 Checks: {checks}{global_sec}\n\n"
+            f"👉 <a href=\"{url}\">Register</a>\n"
+            f"💡 /check to force check anytime"
         )
-        self.send_message(msg)
-
-    # ── Command Polling ───────────────────────────────────────────────────────
 
     def get_updates(self, timeout: int = 30) -> list:
-        """Long-poll for new Telegram updates. Returns list of update dicts."""
-        url = f"{self.base_url}/getUpdates"
-        params = {
-            "offset": self._last_update_id + 1,
-            "timeout": timeout,
-            "allowed_updates": ["message"],
-        }
         try:
-            resp = requests.get(url, params=params, timeout=timeout + 5)
-            if resp.status_code == 200:
-                data = resp.json()
-                updates = data.get("result", [])
+            r = requests.get(f"{self.base}/getUpdates", params={
+                "offset": self._last_update_id + 1,
+                "timeout": timeout,
+                "allowed_updates": ["message"],
+            }, timeout=timeout + 5)
+            if r.status_code == 200:
+                updates = r.json().get("result", [])
                 if updates:
                     self._last_update_id = updates[-1]["update_id"]
                 return updates
-            return []
-        except requests.RequestException:
-            return []
+        except Exception:
+            pass
+        return []
 
 
-# ─── API Client ───────────────────────────────────────────────────────────────
+# ─── Monitor ─────────────────────────────────────────────────────────────────
 
-class AdhahiClient:
-    """Fetches wilaya booking data from the Adhahi public API."""
-
-    def __init__(self, api_url: str):
-        self.api_url = api_url
-        self.session = requests.Session()
-        self.session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                          "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7,ar;q=0.6",
-            "Referer": "https://adhahi.dz/register",
-            "Origin": "https://adhahi.dz",
-        })
-
-    def fetch_wilaya_quotas(self) -> Optional[list]:
-        """Returns list of wilaya dicts or None on error."""
-        try:
-            resp = self.session.get(self.api_url, timeout=30)
-            resp.raise_for_status()
-            data = resp.json()
-            if isinstance(data, list):
-                return data
-            elif isinstance(data, dict) and "data" in data:
-                return data["data"]
-            return None
-        except requests.exceptions.ConnectionError:
-            logger.error("Connection error — network issue or site down")
-            return None
-        except requests.exceptions.Timeout:
-            logger.error("Request timed out (30s)")
-            return None
-        except requests.exceptions.HTTPError as e:
-            logger.error(f"HTTP error: {e}")
-            return None
-        except json.JSONDecodeError:
-            logger.error("Failed to parse API response as JSON")
-            return None
-        except Exception as e:
-            logger.error(f"Unexpected fetch error: {e}")
-            return None
-
-
-# ─── Monitor Core ─────────────────────────────────────────────────────────────
-
-class BookingMonitor:
-    """
-    Main monitor with:
-    - Scheduled checks every N minutes
-    - Instant Telegram alerts on availability change
-    - 2-hour periodic summaries
-    - Telegram command listener (/check, /status, /help)
-    """
-
+class Monitor:
     def __init__(self, config: dict):
-        self.config = config
-        self.telegram = TelegramClient(
-            config["telegram_bot_token"],
-            config["telegram_chat_id"],
-        )
-        self.client = AdhahiClient(config["api_url"])
-        self.target_codes = config["target_wilayas"]
-        self.register_url = config["register_url"]
-        self.check_interval = config.get("check_interval_minutes", 15) * 60
-        self.summary_interval = config.get("summary_interval_hours", 2) * 3600
+        self.cfg          = config
+        self.tg           = TelegramClient(config["telegram_bot_token"], config["telegram_chat_id"])
+        self.targets      = config["target_wilayas"]
+        self.url          = config["register_url"]
+        self.api          = config["api_url"]
+        self.interval     = config.get("check_interval_minutes", 15) * 60
+        self.summary_secs = config.get("summary_interval_hours", 2) * 3600
+        self.registrants  = config.get("registrants", [])
+        self.auto_reg     = config.get("auto_register", False)
 
-        # Shared state (accessed from both threads)
-        self._lock = threading.Lock()
-        self._previous_availability: dict[str, bool] = {}
-        self._last_wilayas: Optional[list] = None       # cached last result
-        self._last_check_time: Optional[datetime] = None
-        self._last_summary_time: datetime = datetime.min
-        self._check_history: list[dict] = []
-        self._total_checks: int = 0
-        self._force_check_event = threading.Event()     # set by command thread
-
-    # ── Main Loop ────────────────────────────────────────────────────────────
+        self._lock            = threading.Lock()
+        self._prev            : dict[str, bool] = {}
+        self._last_wilayas    : Optional[list]  = None
+        self._last_check_time : Optional[datetime] = None
+        self._last_summary    : datetime = datetime.min
+        self._history         : list = []
+        self._checks          : int = 0
+        self._force           = threading.Event()
 
     def run(self):
-        logger.info("=" * 60)
-        logger.info("ADHAHI BOOKING MONITOR — STARTING")
-        logger.info(f"  Tracking {len(self.target_codes)} wilayas: {', '.join(self.target_codes)}")
-        logger.info(f"  Check every {self.config.get('check_interval_minutes', 15)} min | "
-                    f"Summary every {self.config.get('summary_interval_hours', 2)} hrs")
-        logger.info("=" * 60)
+        logger.info("=" * 55)
+        logger.info("ADHAHI MONITOR + AUTO-REGISTER — STARTING")
+        logger.info(f"  Targets: {', '.join(self.targets)}")
+        logger.info(f"  Auto-register: {'ON' if self.auto_reg else 'OFF'}")
+        logger.info("=" * 55)
 
-        # Startup message
-        names = ", ".join(
-            WILAYA_NAME_MAP.get(c, {}).get("fr", c) for c in self.target_codes
-        )
-        self.telegram.send_message(
+        names = ", ".join(WILAYA_MAP.get(c, {}).get("fr", c) for c in self.targets)
+        self.tg.send(
             f"🟢 <b>Adhahi Monitor Started</b>\n\n"
-            f"📍 Tracking ({len(self.target_codes)} wilayas):\n{names}\n\n"
-            f"⏱ Check every {self.config.get('check_interval_minutes', 15)} min\n"
-            f"📊 Summary every {self.config.get('summary_interval_hours', 2)} hrs\n\n"
-            f"💡 Commands: /check · /status · /help\n"
+            f"📍 Tracking ({len(self.targets)}):\n{names}\n\n"
+            f"🤖 Auto-register: {'<b>ON</b> (' + str(len(self.registrants)) + ' people)' if self.auto_reg else 'OFF'}\n"
+            f"⏱ Every {self.cfg.get('check_interval_minutes',15)} min\n"
+            f"💡 /check · /status · /help\n"
             f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         )
 
-        # Start Telegram command listener in background thread
-        cmd_thread = threading.Thread(target=self._command_listener, daemon=True)
-        cmd_thread.start()
+        threading.Thread(target=self._cmd_listener, daemon=True).start()
 
-        # Main scheduler loop
         while True:
             try:
-                self._perform_check(triggered_by="schedule")
+                self._check("schedule")
             except KeyboardInterrupt:
                 break
             except Exception as e:
-                logger.error(f"Error in main loop: {e}", exc_info=True)
+                logger.error(f"Main loop error: {e}", exc_info=True)
                 time.sleep(60)
                 continue
 
-            logger.info(f"Sleeping {self.config.get('check_interval_minutes', 15)} min...")
-            # Sleep in 1-second increments so we can react to force-check events
-            deadline = time.time() + self.check_interval
+            deadline = time.time() + self.interval
             try:
                 while time.time() < deadline:
-                    if self._force_check_event.is_set():
-                        self._force_check_event.clear()
-                        logger.info("Force check triggered by Telegram command!")
-                        self._perform_check(triggered_by="command")
-                        # Reset deadline after forced check
-                        deadline = time.time() + self.check_interval
+                    if self._force.is_set():
+                        self._force.clear()
+                        self._check("command")
+                        deadline = time.time() + self.interval
                     time.sleep(1)
             except KeyboardInterrupt:
                 break
 
-        logger.info("Monitor stopped.")
-        self.telegram.send_message("🔴 <b>Adhahi Monitor Stopped</b>")
+        self.tg.send("🔴 <b>Adhahi Monitor Stopped</b>")
 
-    # ── Check Logic ──────────────────────────────────────────────────────────
+    def _fetch(self) -> Optional[list]:
+        try:
+            r = requests.get(self.api, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept": "application/json",
+                "Referer": "https://adhahi.dz/register",
+                "Origin": "https://adhahi.dz",
+            }, timeout=30)
+            r.raise_for_status()
+            d = r.json()
+            return d if isinstance(d, list) else d.get("data")
+        except Exception as e:
+            logger.error(f"Fetch error: {e}")
+            return None
 
-    def _perform_check(self, triggered_by: str = "schedule"):
+    def _check(self, trigger: str = "schedule"):
         with self._lock:
-            self._total_checks += 1
-            check_num = self._total_checks
-
+            self._checks += 1
+            n = self._checks
         now = datetime.now()
-        logger.info(f"Check #{check_num} [{triggered_by}] at {now.strftime('%H:%M:%S')}")
+        logger.info(f"Check #{n} [{trigger}] at {now.strftime('%H:%M:%S')}")
 
-        wilayas = self.client.fetch_wilaya_quotas()
+        wilayas = self._fetch()
         if wilayas is None:
-            logger.warning("Skipping — could not fetch data")
+            logger.warning("Skipping — no data")
             return
 
-        logger.info(f"Got data for {len(wilayas)} wilayas")
-
-        # Detect newly available wilayas
+        logger.info(f"Got {len(wilayas)} wilayas")
         newly_available = []
+
         with self._lock:
             for w in wilayas:
-                code = w.get("wilayaCode", "")
-                if code not in self.target_codes:
-                    continue
+                code    = w.get("wilayaCode", "")
                 is_avail = w.get("available", False)
-                was_avail = self._previous_availability.get(code, False)
-                name = w.get("wilayaNameFr", code)
+                if code not in self.targets:
+                    continue
+                was_avail = self._prev.get(code, False)
+                name      = w.get("wilayaNameFr", code)
+                logger.info(f"  {'AVAILABLE' if is_avail else 'unavailable'}: {name} ({code})")
+                if is_avail and not was_avail:
+                    newly_available.append((code, w))
+                self._prev[code] = is_avail
 
-                if is_avail:
-                    logger.info(f"  AVAILABLE: {name} (code {code})")
-                    if not was_avail:
-                        newly_available.append((code, w))
-                        logger.info(f"  >> {name} just became available — ALERTING!")
-                else:
-                    logger.info(f"  unavailable: {name} (code {code})")
-
-                self._previous_availability[code] = is_avail
-
-            # Cache last result
-            self._last_wilayas = wilayas
+            self._last_wilayas    = wilayas
             self._last_check_time = now
-
-            # Record check history
-            record = {
-                "time": now.isoformat(),
-                "available_count": sum(1 for w in wilayas if w.get("available")),
-                "target_status": {
-                    w.get("wilayaCode", ""): w.get("available", False)
-                    for w in wilayas if w.get("wilayaCode", "") in self.target_codes
-                },
-            }
-            self._check_history.append(record)
+            self._history.append({"time": now.isoformat()})
             cutoff = now - timedelta(hours=2, minutes=5)
-            self._check_history = [
-                c for c in self._check_history
-                if datetime.fromisoformat(c["time"]) > cutoff
-            ]
-            checks_count = len(self._check_history)
+            self._history = [h for h in self._history if datetime.fromisoformat(h["time"]) > cutoff]
+            checks = len(self._history)
+            due    = (now - self._last_summary).total_seconds() >= self.summary_secs
+            if due:
+                self._last_summary = now
 
-        # Send instant alerts for newly available wilayas
-        for code, w_data in newly_available:
-            self.telegram.send_availability_alert(code, w_data, self.register_url)
+        # Alerts for newly available
+        for code, w in newly_available:
+            self.tg.send_alert(code, w, self.url)
+            # Launch one Chrome window per registrant in parallel
+            if self.auto_reg and self.registrants:
+                wilaya_name = w.get('wilayaNameFr', code)
+                logger.info(f"Launching {len(self.registrants)} Chrome windows for {wilaya_name}...")
+                self.tg.send(
+                    f"🤖 Opening <b>{len(self.registrants)} Chrome windows</b> to auto-fill...\n"
+                    f"Each person will need to solve their own CAPTCHA + OTP."
+                )
+                for i, person in enumerate(self.registrants):
+                    name = person.get('name', f'Person {i+1}')
+                    if not person.get('nin'):
+                        logger.warning(f"Skipping {name} — NIN not set")
+                        continue
+                    logger.info(f"  Starting Chrome for: {name}")
+                    threading.Thread(
+                        target=auto_fill_form,
+                        args=(person, self.url, self.tg.send),
+                        daemon=True,
+                    ).start()
+                    time.sleep(2)  # stagger launches slightly
 
-        # For /check commands, always send full result
-        if triggered_by == "command":
-            self.telegram.send_check_result(wilayas, self.target_codes, self.register_url, triggered_by="command")
+        if trigger == "command":
+            self.tg.send_check_result(wilayas, self.targets, self.url)
 
-        # 2-hour summary
-        with self._lock:
-            due_summary = (now - self._last_summary_time).total_seconds() >= self.summary_interval
-            if due_summary:
-                self._last_summary_time = now
+        if due:
+            hrs = self.cfg.get("summary_interval_hours", 2)
+            self.tg.send_summary(wilayas, self.targets, self.url, checks, hrs)
 
-        if due_summary:
-            logger.info("Sending 2-hour summary...")
-            self.telegram.send_summary(wilayas, self.target_codes, self.register_url, checks_count)
-
-        # Log all available
         all_avail = [w for w in wilayas if w.get("available")]
-        if all_avail:
-            logger.info(f"  Nationally available: {', '.join(w.get('wilayaNameFr','?') for w in all_avail)}")
-        else:
-            logger.info("  No wilayas available nationwide")
+        logger.info(f"  Nationally available: {', '.join(w.get('wilayaNameFr','?') for w in all_avail) or 'none'}")
 
-    # ── Telegram Command Listener ─────────────────────────────────────────────
+    # ── Command listener ─────────────────────────────────────────────
 
-    def _command_listener(self):
-        """Background thread: long-polls Telegram for commands."""
-        logger.info("Command listener started (listening for /check, /status, /help)")
+    def _cmd_listener(self):
+        logger.info("Command listener active (/check /status /help)")
         while True:
             try:
-                updates = self.telegram.get_updates(timeout=30)
-                for update in updates:
-                    self._handle_update(update)
+                for upd in self.tg.get_updates(30):
+                    self._handle(upd)
             except Exception as e:
-                logger.error(f"Command listener error: {e}")
+                logger.error(f"Cmd listener error: {e}")
                 time.sleep(5)
 
-    def _handle_update(self, update: dict):
-        """Process a single Telegram update."""
-        message = update.get("message", {})
-        chat_id = str(message.get("chat", {}).get("id", ""))
-        text = message.get("text", "").strip().lower()
-
-        if not text:
+    def _handle(self, upd: dict):
+        msg     = upd.get("message", {})
+        chat_id = str(msg.get("chat", {}).get("id", ""))
+        text    = msg.get("text", "").strip().lower()
+        if not text or chat_id != self.tg.chat_id:
             return
-
-        # Security: only respond to the configured chat
-        if chat_id != self.telegram.chat_id:
-            logger.warning(f"Ignoring message from unknown chat_id: {chat_id}")
-            return
-
-        logger.info(f"Received command: '{text}' from chat {chat_id}")
+        logger.info(f"Command: '{text}'")
 
         if text.startswith("/check"):
-            self._cmd_check()
+            self.tg.send("🔍 <b>Forcing check...</b>")
+            self._force.set()
         elif text.startswith("/status"):
-            self._cmd_status()
+            with self._lock:
+                wilayas = self._last_wilayas
+                t       = self._last_check_time
+            if not wilayas:
+                self.tg.send("⚠️ No data yet. Send /check to force one.")
+                return
+            lines = []
+            for w in wilayas:
+                code = w.get("wilayaCode", "")
+                if code not in self.targets:
+                    continue
+                fr  = w.get("wilayaNameFr", WILAYA_MAP.get(code, {}).get("fr", "?"))
+                rgn = WILAYA_MAP.get(code, {}).get("region", "")
+                lines.append(f"  {'✅' if w.get('available') else '❌'} {fr} [{rgn}]")
+            age = (datetime.now() - t).seconds // 60 if t else "?"
+            self.tg.send(
+                f"📋 <b>Last Status</b> ({age} min ago)\n{'━'*28}\n"
+                + "\n".join(lines) + "\n\n💡 /check to refresh"
+            )
         elif text.startswith("/help"):
-            self._cmd_help()
+            names = "\n".join(
+                f"  • {WILAYA_MAP.get(c,{}).get('fr',c)} ({c})" for c in self.targets
+            )
+            self.tg.send(
+                f"🤖 <b>Adhahi Monitor Commands</b>\n{'━'*28}\n\n"
+                f"/check — Force immediate check\n"
+                f"/status — Last known status\n"
+                f"/help — This message\n\n"
+                f"📍 <b>Tracking ({len(self.targets)}):</b>\n{names}\n\n"
+                f"🤖 Auto-register: {'ON (' + str(len(self.registrants)) + ' people)' if self.auto_reg else 'OFF'}"
+            )
         else:
-            self.telegram.send_message(
-                f"❓ Unknown command: <code>{text}</code>\n\nSend /help for available commands."
+            # Auto-reply to any message with current status + tips
+            with self._lock:
+                wilayas = self._last_wilayas
+                t       = self._last_check_time
+            age = f"{(datetime.now() - t).seconds // 60} min ago" if t else "not yet"
+
+            if wilayas:
+                target_lines = []
+                for w in wilayas:
+                    code = w.get("wilayaCode", "")
+                    if code not in self.targets:
+                        continue
+                    fr   = w.get("wilayaNameFr", WILAYA_MAP.get(code, {}).get("fr", "?"))
+                    icon = "✅" if w.get("available") else "❌"
+                    target_lines.append(f"  {icon} {fr}")
+                status_block = "\n".join(target_lines)
+            else:
+                status_block = "  No data yet"
+
+            self.tg.send(
+                f"👋 <b>Adhahi Monitor</b> is active!\n"
+                f"{'━'*28}\n\n"
+                f"📋 <b>Last check:</b> {age}\n"
+                f"{status_block}\n\n"
+                f"📟 <b>Commands:</b>\n"
+                f"  /check — Force immediate check\n"
+                f"  /status — Full status\n"
+                f"  /help — All commands\n\n"
+                f"⏱ Next auto-check in ~{self.cfg.get('check_interval_minutes', 15)} min"
             )
 
-    def _cmd_check(self):
-        """Handle /check command — trigger an immediate check."""
-        self.telegram.send_message(
-            "🔍 <b>Forcing immediate check...</b>\nResults will appear shortly!"
-        )
-        # Signal the main loop to run a check ASAP
-        self._force_check_event.set()
 
-    def _cmd_status(self):
-        """Handle /status — show cached last known status without re-checking."""
-        with self._lock:
-            wilayas = self._last_wilayas
-            last_time = self._last_check_time
-            checks = len(self._check_history)
-
-        if wilayas is None:
-            self.telegram.send_message(
-                "⚠️ No data yet — first check hasn't completed. Try again in a moment, "
-                "or send /check to force one."
-            )
-            return
-
-        lines = []
-        for w in wilayas:
-            code = w.get("wilayaCode", "")
-            if code not in self.target_codes:
-                continue
-            name_fr = w.get("wilayaNameFr", WILAYA_NAME_MAP.get(code, {}).get("fr", "?"))
-            region = WILAYA_NAME_MAP.get(code, {}).get("region", "")
-            icon = "✅" if w.get("available") else "❌"
-            lines.append(f"  {icon} {name_fr} [{region}]")
-
-        age = (datetime.now() - last_time).seconds // 60 if last_time else "?"
-        msg = (
-            f"📋 <b>Last Known Status</b> (from {age} min ago)\n"
-            f"⏰ {last_time.strftime('%H:%M:%S') if last_time else '?'}\n"
-            f"{'━' * 28}\n"
-            + "\n".join(lines) +
-            f"\n\n💡 Send /check to refresh now."
-        )
-        self.telegram.send_message(msg)
-
-    def _cmd_help(self):
-        """Handle /help command."""
-        names = "\n".join(
-            f"  • {WILAYA_NAME_MAP.get(c, {}).get('fr', c)} (code {c}) — "
-            f"{WILAYA_NAME_MAP.get(c, {}).get('region', '')}"
-            for c in self.target_codes
-        )
-        self.telegram.send_message(
-            f"🤖 <b>Adhahi Monitor — Commands</b>\n"
-            f"{'━' * 28}\n\n"
-            f"/check — Force an immediate availability check\n"
-            f"/status — Show last known status (no re-check)\n"
-            f"/help — Show this help message\n\n"
-            f"📍 <b>Tracked Wilayas ({len(self.target_codes)}):</b>\n{names}\n\n"
-            f"⏱ Auto-checks every {self.config.get('check_interval_minutes', 15)} min\n"
-            f"📊 Summary every {self.config.get('summary_interval_hours', 2)} hrs"
-        )
-
-
-# ─── Entry Point ──────────────────────────────────────────────────────────────
+# ─── Entry point ─────────────────────────────────────────────────────────────
 
 def main():
     print("""
     ╔══════════════════════════════════════════════════╗
-    ║     ADHAHI.DZ BOOKING MONITOR                   ║
-    ║     Alger + nearby wilayas                      ║
-    ║     Commands: /check  /status  /help            ║
+    ║   ADHAHI MONITOR + AUTO-REGISTER                ║
+    ║   /check · /status · /help                      ║
     ╚══════════════════════════════════════════════════╝
     """)
     config = load_config()
-    monitor = BookingMonitor(config)
-    monitor.run()
-
+    Monitor(config).run()
 
 if __name__ == "__main__":
     main()
