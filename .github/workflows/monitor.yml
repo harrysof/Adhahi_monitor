@@ -1,0 +1,54 @@
+name: Adhahi Booking Monitor
+
+on:
+  schedule:
+    # Runs every 15 minutes
+    - cron: '*/15 * * * *'
+  workflow_dispatch:  # Allows manual trigger from GitHub UI (acts as /check)
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Write config from secrets
+        run: |
+          cat > config.json << 'EOF'
+          {
+            "telegram_bot_token": "${{ secrets.TELEGRAM_BOT_TOKEN }}",
+            "telegram_chat_id": "${{ secrets.TELEGRAM_CHAT_ID }}",
+            "check_interval_minutes": 15,
+            "summary_interval_hours": 2,
+            "target_wilayas": ["16","09","15","35","42","44","26","10","02"],
+            "api_url": "https://adhahi.dz/api/v1/public/wilaya-quotas",
+            "register_url": "https://adhahi.dz/register"
+          }
+          EOF
+
+      - name: Restore state from cache
+        uses: actions/cache@v4
+        with:
+          path: state.json
+          key: adhahi-state-${{ github.run_number }}
+          restore-keys: |
+            adhahi-state-
+
+      - name: Run monitor
+        run: python monitor_cron.py
+
+      - name: Save state to cache
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: state.json
+          key: adhahi-state-${{ github.run_number }}
