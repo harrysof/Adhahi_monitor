@@ -18,3 +18,4 @@ coverage.xml
 config.json
 NSSM_OFF.bat
 NSSM_ON.bat
+NSSM_Res.bat

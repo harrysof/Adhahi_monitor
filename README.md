@@ -9,27 +9,15 @@ fill the registration form for multiple people simultaneously.
 
 ---
 
-## Features
+## 🚀 Quick Start
 
-| Feature | Details |
-|---|---|
-| 🔍 **Monitors 9 wilayas** | Alger, Blida, Tizi Ouzou, Boumerdès, Tipaza, Aïn Defla, Médéa, Bouira, Chlef |
-| 🚨 **Instant triple alert** | Telegram ping ×3 the moment a booking opens |
-| 📊 **2-hour summaries** | Full status report every 2 hours |
-| 🤖 **Auto-register** | Opens Chrome and fills the form automatically |
-| 👥 **Multi-person** | Register multiple people simultaneously (one Chrome window each) |
-| 💬 **Telegram commands** | `/check` `/status` `/help` + replies to any message |
-
----
-
-## Setup
-
-### 1. Install dependencies
+### 1. Install Dependencies
 ```bash
 pip install -r requirements.txt
 ```
 
 ### 2. Configure `config.json`
+Create a `config.json` file in the root directory (use the template below).
 
 ```json
 {
@@ -60,47 +48,59 @@ pip install -r requirements.txt
 }
 ```
 
-**Getting your Telegram credentials:**
-1. Message **@BotFather** → `/newbot` → copy the token
-2. Send any message to your bot, then open:
-   `https://api.telegram.org/bot<TOKEN>/getUpdates`
-   and find `chat.id`
+### 3. Telegram Setup (Important!)
+1.  **Get Token:** Message **@BotFather** on Telegram, create a new bot, and copy the token.
+2.  **Get Chat ID:**
+    *   For personal: Message your bot, then check `https://api.telegram.org/bot<TOKEN>/getUpdates`.
+    *   For groups: Add the bot to the group, then use a bot like `@userinfobot` to get the group's **negative ID** (e.g., `-100...`).
+3.  **Group Privacy (CRITICAL):** By default, bots cannot see group messages.
+    *   Go to **@BotFather** → `/mybots` → Select your bot.
+    *   **Bot Settings** → **Group Privacy** → **Turn OFF**.
 
-### 3. Run
+### 4. Run the Monitor
 ```bash
 python monitor.py
 ```
 
 ---
 
-## Telegram Commands
+## 🛠 Features
+
+| Feature | Details |
+|---|---|
+| 🔍 **Monitors 9 wilayas** | Alger, Blida, Tizi Ouzou, Boumerdès, Tipaza, Aïn Defla, Médéa, Bouira, Chlef |
+| 🚨 **Instant Alerts** | Triple Telegram ping the moment a booking opens |
+| 📊 **Periodic Summaries** | Full status report every 2 hours |
+| 🤖 **Auto-Register** | Fills Chrome form automatically for multiple people |
+| 💬 **Bot Commands** | `/check`, `/status`, `/ping`, `/help` |
+
+---
+
+## 📟 Telegram Commands
 
 | Command | Action |
 |---|---|
 | `/check` | Force an immediate check right now |
-| `/status` | Show last known status (no re-check) |
-| `/help` | List commands + tracked wilayas |
-| *Any message* | Bot replies with current status + command list |
+| `/status` | Show last known status (cached) |
+| `/ping` | Check if the bot is alive and responding |
+| `/help` | List all commands and tracked wilayas |
 
 ---
 
-## Auto-Register
+## 🤖 Auto-Register Details
 
-Set `"auto_register": true` in `config.json` and fill in `registrants`.
+Set `"auto_register": true` in `config.json` and add your info to the `registrants` list.
 
-When a target wilaya becomes available:
-1. Bot sends **3 urgent Telegram alerts**
-2. Opens **one Chrome window per person** (staggered 2 seconds apart)
-3. Auto-fills: NIN, CNI, phone, email, password, wilaya, commune, payment
-4. **Pauses** → sends you a Telegram ping to solve the CAPTCHA
-5. **Pauses again** → sends you a ping to enter the SMS OTP
-6. Confirms submission
-
-You can add as many people as needed to the `registrants` list.
+1.  **Alert:** Bot sends 3 urgent Telegram notifications.
+2.  **Browser:** Opens one Chrome window per registrant (staggered).
+3.  **Form:** Auto-fills NIN, CNI, phone, wilaya, etc.
+4.  **CAPTCHA:** Bot pings you on Telegram to solve the CAPTCHA manually.
+5.  **OTP:** Bot pings you to enter the SMS OTP in the browser.
+6.  **Done:** Once you enter OTP, registration is complete.
 
 ---
 
-## Wilaya Codes Reference
+## 📍 Tracked Wilayas
 
 | Code | Wilaya | Arabic |
 |---|---|---|
@@ -113,9 +113,3 @@ You can add as many people as needed to the `registrants` list.
 | 26 | Médéa | المدية |
 | 10 | Bouira | البويرة |
 | 02 | Chlef | الشلف |
-
----
-
-## Hosting 24/7 on Your PC (Windows)
-
-See the **[Windows 24/7 Hosting Guide](#)** below.

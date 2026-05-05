@@ -461,8 +461,12 @@ class Monitor:
         # (random DMs, other groups) are silently dropped.
         if not text or chat_id != self.tg.chat_id:
             return
+        # In groups Telegram appends the bot username: /check@MyBot
+        # Strip it so command matching works identically in DMs and groups.
+        if text.startswith("/") and "@" in text:
+            text = text.split("@")[0]
         sender = msg.get("from", {}).get("username") or msg.get("from", {}).get("first_name", "?")
-        logger.info(f"Command: '{text}' from @{sender}")
+        logger.info(f"Command: '{text}' from @{sender} (chat: {chat_id})")
 
         if text.startswith("/ping"):
             with self._lock:
@@ -506,36 +510,7 @@ class Monitor:
                 f"🤖 Auto-register: {'ON (' + str(len(self.registrants)) + ' people)' if self.auto_reg else 'OFF'}"
             )
         else:
-            # Auto-reply to any message with current status + tips
-            with self._lock:
-                wilayas = self._last_wilayas
-                t       = self._last_check_time
-            age = f"{(datetime.now() - t).seconds // 60} min ago" if t else "not yet"
-
-            if wilayas:
-                target_lines = []
-                for w in wilayas:
-                    code = w.get("wilayaCode", "")
-                    if code not in self.targets:
-                        continue
-                    fr   = w.get("wilayaNameFr", WILAYA_MAP.get(code, {}).get("fr", "?"))
-                    icon = "✅" if w.get("available") else "❌"
-                    target_lines.append(f"  {icon} {fr}")
-                status_block = "\n".join(target_lines)
-            else:
-                status_block = "  No data yet"
-
-            self.tg.send(
-                f"👋 <b>Adhahi Monitor</b> is active!\n"
-                f"{'━'*28}\n\n"
-                f"📋 <b>Last check:</b> {age}\n"
-                f"{status_block}\n\n"
-                f"📟 <b>Commands:</b>\n"
-                f"  /check — Force immediate check\n"
-                f"  /status — Full status\n"
-                f"  /help — All commands\n\n"
-                f"⏱ Next auto-check in ~{self.cfg.get('check_interval_minutes', 15)} min"
-            )
+            pass  # ignore non-command messages
 
 
 # ─── Entry point ─────────────────────────────────────────────────────────────
