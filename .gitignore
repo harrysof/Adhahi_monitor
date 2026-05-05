@@ -16,3 +16,5 @@ coverage.xml
 *.log
 .DS_Store
 config.json
+NSSM_OFF.bat
+NSSM_ON.bat

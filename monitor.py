@@ -267,6 +267,24 @@ class TelegramClient:
             pass
         return []
 
+    def set_commands(self):
+        """Register the bot command menu visible to users in Telegram."""
+        commands = [
+            {"command": "check",  "description": "Force an immediate availability check"},
+            {"command": "status", "description": "Show last known status (no re-check)"},
+            {"command": "ping",   "description": "Check if the bot is still running"},
+            {"command": "help",   "description": "List all commands and tracked wilayas"},
+        ]
+        try:
+            r = requests.post(f"{self.base}/setMyCommands",
+                              json={"commands": commands}, timeout=15)
+            if r.status_code == 200:
+                logger.info("Telegram command menu registered")
+            else:
+                logger.warning(f"setMyCommands failed: {r.text[:120]}")
+        except Exception as e:
+            logger.error(f"setMyCommands error: {e}")
+
 
 # ─── Monitor ─────────────────────────────────────────────────────────────────
 
@@ -308,6 +326,7 @@ class Monitor:
             f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         )
 
+        self.tg.set_commands()
         threading.Thread(target=self._cmd_listener, daemon=True).start()
 
         while True:
@@ -436,11 +455,21 @@ class Monitor:
         msg     = upd.get("message", {})
         chat_id = str(msg.get("chat", {}).get("id", ""))
         text    = msg.get("text", "").strip().lower()
+        # Accept commands from the configured chat only.
+        # For a group this is the group's negative ID; for a personal chat it
+        # is the owner's positive ID.  Either way, messages from any other chat
+        # (random DMs, other groups) are silently dropped.
         if not text or chat_id != self.tg.chat_id:
             return
-        logger.info(f"Command: '{text}'")
+        sender = msg.get("from", {}).get("username") or msg.get("from", {}).get("first_name", "?")
+        logger.info(f"Command: '{text}' from @{sender}")
 
-        if text.startswith("/check"):
+        if text.startswith("/ping"):
+            with self._lock:
+                t = self._last_check_time
+            age = t.strftime("%H:%M:%S") if t else "not yet"
+            self.tg.send(f"✅ <b>Alive</b> — last check: {age}")
+        elif text.startswith("/check"):
             self.tg.send("🔍 <b>Forcing check...</b>")
             self._force.set()
         elif text.startswith("/status"):
@@ -471,6 +500,7 @@ class Monitor:
                 f"🤖 <b>Adhahi Monitor Commands</b>\n{'━'*28}\n\n"
                 f"/check — Force immediate check\n"
                 f"/status — Last known status\n"
+                f"/ping — Check bot is alive\n"
                 f"/help — This message\n\n"
                 f"📍 <b>Tracking ({len(self.targets)}):</b>\n{names}\n\n"
                 f"🤖 Auto-register: {'ON (' + str(len(self.registrants)) + ' people)' if self.auto_reg else 'OFF'}"
