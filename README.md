@@ -1,23 +1,58 @@
-# 🐑 Adhahi Booking Monitor + Auto-Register
+# 🐑 Adhahi Monitor
 
 Monitors **adhahi.dz** for sheep booking availability in Alger and nearby wilayas.
-Sends instant Telegram alerts the moment a booking opens, and can automatically
-fill the registration form for multiple people simultaneously.
+Sends instant Telegram alerts the moment a quota opens, and keeps you updated with periodic summaries.
 
-> ⚠️ **Must run locally on an Algerian internet connection.**
-> adhahi.dz geo-blocks all cloud providers (GitHub Actions, Railway, Heroku, etc.)
+> ⚠️ **Must run on an Algerian internet connection.** adhahi.dz geo-blocks all cloud providers (GitHub Actions, Railway, Heroku, etc.)
+
+---
+
+## How it works
+
+The bot polls the adhahi.dz public API every 15 minutes. It tracks availability per wilaya and only fires an alert when a wilaya **changes** from unavailable → available (no spam on every check). When a slot opens, it sends 3 back-to-back Telegram messages so you actually notice.
+
+Every 2 hours it also sends a full status summary of all tracked wilayas regardless of changes.
+
+---
+
+## 📟 Telegram Commands
+
+| Command | What it does |
+|---------|--------------|
+| `/check` | Force an immediate check right now |
+| `/status` | Show last known status (no re-check, uses cache) |
+| `/ping` | Confirm the bot is alive and show last check time |
+| `/help` | List all commands and currently tracked wilayas |
+
+---
+
+## 📍 Tracked Wilayas
+
+| Code | Wilaya | Arabic |
+|------|--------|--------|
+| 16 | Alger | الجزائر |
+| 09 | Blida | البليدة |
+| 15 | Tizi Ouzou | تيزي وزو |
+| 35 | Boumerdès | بومرداس |
+| 42 | Tipaza | تيبازة |
+| 44 | Aïn Defla | عين الدفلى |
+| 26 | Médéa | المدية |
+| 10 | Bouira | البويرة |
+| 02 | Chlef | الشلف |
+
+You can change which wilayas are tracked via `target_wilayas` in `config.json`.
 
 ---
 
 ## 🚀 Quick Start
 
-### 1. Install Dependencies
+### 1. Install dependencies
+
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. Configure `config.json`
-Create a `config.json` file in the root directory (use the template below).
+### 2. Create `config.json`
 
 ```json
 {
@@ -29,87 +64,50 @@ Create a `config.json` file in the root directory (use the template below).
 
     "target_wilayas": ["16","09","15","35","42","44","26","10","02"],
     "api_url":        "https://adhahi.dz/api/v1/public/wilaya-quotas",
-    "register_url":   "https://adhahi.dz/register",
-
-    "auto_register": false,
-    "registrants": [
-        {
-            "name":     "Person 1",
-            "nin":      "18-digit national ID",
-            "cni":      "9-digit card number",
-            "phone":    "05xxxxxxxx",
-            "email":    "email@example.com",
-            "password": "YourPassword1@",
-            "wilaya":   "الجزائر",
-            "commune":  "الجزائر الوسطى",
-            "payment":  "cash"
-        }
-    ]
+    "register_url":   "https://adhahi.dz/register"
 }
 ```
 
-### 3. Telegram Setup (Important!)
-1.  **Get Token:** Message **@BotFather** on Telegram, create a new bot, and copy the token.
-2.  **Get Chat ID:**
-    *   For personal: Message your bot, then check `https://api.telegram.org/bot<TOKEN>/getUpdates`.
-    *   For groups: Add the bot to the group, then use a bot like `@userinfobot` to get the group's **negative ID** (e.g., `-100...`).
-3.  **Group Privacy (CRITICAL):** By default, bots cannot see group messages.
-    *   Go to **@BotFather** → `/mybots` → Select your bot.
-    *   **Bot Settings** → **Group Privacy** → **Turn OFF**.
+### 3. Set up Telegram
 
-### 4. Run the Monitor
+1. Message **@BotFather**, create a new bot, copy the token.
+2. Get your chat ID:
+   - **Personal:** Message your bot, then open `https://api.telegram.org/bot<TOKEN>/getUpdates` in a browser.
+   - **Group:** Add the bot to the group, use `@userinfobot` to get the group's negative ID (e.g. `-100...`).
+3. **If using a group** — go to @BotFather → `/mybots` → your bot → Bot Settings → Group Privacy → **Turn OFF**. Otherwise the bot can't read commands.
+
+### 4. Run
+
+**Long-running (recommended):**
 ```bash
 python monitor.py
 ```
+Stays running, listens for Telegram commands, checks on schedule.
+
+**Single-run / cron mode:**
+```bash
+python monitor_cron.py
+```
+Checks once and exits. Persists state in `state.json` between runs so alerts only fire on changes. Suitable for task schedulers.
 
 ---
 
-## 🛠 Features
+## 🛠 Files
 
-| Feature | Details |
-|---|---|
-| 🔍 **Monitors 9 wilayas** | Alger, Blida, Tizi Ouzou, Boumerdès, Tipaza, Aïn Defla, Médéa, Bouira, Chlef |
-| 🚨 **Instant Alerts** | Triple Telegram ping the moment a booking opens |
-| 📊 **Periodic Summaries** | Full status report every 2 hours |
-| 🤖 **Auto-Register** | Fills Chrome form automatically for multiple people |
-| 💬 **Bot Commands** | `/check`, `/status`, `/ping`, `/help` |
-
----
-
-## 📟 Telegram Commands
-
-| Command | Action |
-|---|---|
-| `/check` | Force an immediate check right now |
-| `/status` | Show last known status (cached) |
-| `/ping` | Check if the bot is alive and responding |
-| `/help` | List all commands and tracked wilayas |
+| File | Purpose |
+|------|---------|
+| `monitor.py` | Long-running bot with Telegram command listener |
+| `monitor_cron.py` | Single-run version for cron/task scheduler |
+| `check_names.py` | Utility — prints wilaya names (FR + AR) from the API, useful for debugging |
+| `config.json` | Your config (not committed) |
+| `state.json` | Persisted availability state between cron runs (auto-created) |
+| `monitor.log` | Log file (auto-created) |
 
 ---
 
-## 🤖 Auto-Register Details
+## Notes
 
-Set `"auto_register": true` in `config.json` and add your info to the `registrants` list.
-
-1.  **Alert:** Bot sends 3 urgent Telegram notifications.
-2.  **Browser:** Opens one Chrome window per registrant (staggered).
-3.  **Form:** Auto-fills NIN, CNI, phone, wilaya, etc.
-4.  **CAPTCHA:** Bot pings you on Telegram to solve the CAPTCHA manually.
-5.  **OTP:** Bot pings you to enter the SMS OTP in the browser.
-6.  **Done:** Once you enter OTP, registration is complete.
-
----
-
-## 📍 Tracked Wilayas
-
-| Code | Wilaya | Arabic |
-|---|---|---|
-| 16 | Alger | الجزائر |
-| 09 | Blida | البليدة |
-| 15 | Tizi Ouzou | تيزي وزو |
-| 35 | Boumerdès | بومرداس |
-| 42 | Tipaza | تيبازة |
-| 44 | Aïn Defla | عين الدفلى |
-| 26 | Médéa | المدية |
-| 10 | Bouira | البويرة |
-| 02 | Chlef | الشلف |
+- Alerts only fire on **state changes** (unavailable → available), not on every check.
+- The 2-hour summary runs regardless and shows the full picture including wilayas available nationwide outside your tracked list.
+- Logs are written to both console and `monitor.log`.
+- Windows users: UTF-8 console encoding is handled automatically.
